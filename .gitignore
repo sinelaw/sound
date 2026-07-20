@@ -5,6 +5,10 @@
 *.midi
 *.mid
 stems/
+# ...but the band arrangement MIDI is the tracked "score" (source of truth
+# for the notes; edit in a DAW). The base transcription MIDI is regenerable
+# from the .ly, so it stays ignored.
+!uf-gozal-band.midi
 
 # generated engravings (but keep the original input score)
 *.pdf

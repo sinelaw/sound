@@ -77,8 +77,10 @@ NBARS = len(bars)
 
 # ---------------------------------------------------------------- sections
 SOLO_BARS = range(58, 67)
-SUBDUED_BARS = {52, 53, 54}         # quiet heart of the breakdown (band fades in
-                                    # over 50-51 and ramps back up over 55-57)
+# The coda no longer strips the arrangement - the band plays the SAME parts but
+# very softly (a continuous gain dip, see accomp_gain below), so nothing drops
+# out, it just gets quiet. SUBDUED kept empty so the old branches fall through.
+SUBDUED_BARS = set()
 SOLO_LAST = 66                     # gets the blues descent
 CLEAN_MEL_BARS = set(range(1, 5)) | set(range(30, 34))
 SECTION_STARTS = {1, 5, 14, 23, 30, 34, 43, 50, 58, 67, 71, 74, 77}
@@ -141,7 +143,7 @@ for st, dur, p, v in melody:
         d = min(dur, DESC_START - st) if b == SOLO_LAST else dur
         put(CH_SOLO, p, hum(78, 6), st, d)            # quieter, clean
     elif b in CLEAN_MEL_BARS:
-        put(CH_RHY, p, hum(84, 6), st, dur)          # intro motif on rhythm guitar
+        put(CH_CLEAN, p, hum(94, 5), st, dur)        # intro motif: clean gtr, present
     else:
         # fade the very last notes of the tune down to a soft ending (~4:04)
         lv = 96
@@ -151,14 +153,14 @@ for st, dur, p, v in melody:
             lv = 78
         put(CH_LEAD, p, hum(lv, 5), st, dur)
 
-# --- fast abrupt blues descent, then tumble down ~1 more octave -------------
-# notes are strictly non-overlapping (durations < the step) and stop at F1 -
-# lower than that through the cascaded distortion amp is subsonic noise.
+# --- slow, deliberate blues descent, tumbling ~2 octaves down ---------------
+# half-speed (16th-note steps) so it reads as a clear descending line, not a
+# blur. Strictly non-overlapping; ends on F1. Spills past the barline into 67.
 DESC = [77, 74, 70, 65, 60, 53, 48, 41, 29]   # F blues plunge, ends on F1
 tpos = DESC_START
 for i, p in enumerate(DESC):
-    step = T if i < len(DESC) - 1 else S
-    put(CH_SOLO, p, hum(90 - i * 4, 3), tpos, int(step * 0.85))
+    step = S if i < len(DESC) - 1 else E       # 16ths, last note longer
+    put(CH_SOLO, p, hum(92 - i * 3, 3), tpos, int(step * 0.9))
     tpos += step
 DESC_NOTES = set(DESC)
 
@@ -205,6 +207,9 @@ for i, (st, dur, p) in enumerate(solo):
             bend.append((st + int(dur * 0.4) + k * 90, mido.Message(
                 "pitchwheel", pitch=bval(depth), channel=CH_SOLO)))
         bend.append((st + dur - 2, mido.Message("pitchwheel", pitch=0, channel=CH_SOLO)))
+# make sure the wheel is centred before the descent - a stray bend on those
+# low notes through the amp would be exactly the kind of "weird sound" to avoid
+bend.append((DESC_START - 4, mido.Message("pitchwheel", pitch=0, channel=CH_SOLO)))
 
 # ---------------------------------------------------------------- helpers
 def chords_in(a, b):
@@ -386,8 +391,8 @@ for bi, (a, b, beats) in enumerate(bars):
     # which would drag them on to ~1:40 - they should stop by ~1:30).
     is_chorus = sec in ("chorus", "outro")
 
-    if subdued or bar >= 80:
-        # breakdown / soft ending: light kit - soft hats, kick 1, sidestick 3
+    if bar >= 80:
+        # soft ending: light kit - soft hats, kick 1, sidestick 3
         for k in range(nb * 2):
             put(CH_DRUM, HH, hum(38, 3), a + k * E, E - 10)
         put(CH_DRUM, K, hum(60), a, E)
@@ -449,11 +454,11 @@ for bi, (a, b, beats) in enumerate(bars):
 #    two OF the coda (50-51), sits low through 52-54, and ramps back up over
 #    55-57. Continuous (per-note by onset time) so it glides, not steps.
 ACCOMP = {CH_RHY, CH_CLEAN, CH_BASS, CH_PIANO, CH_ORGAN, CH_STR, CH_DRUM}
-LOW = 0.4
+LOW = 0.3                                       # very soft, but NOT silent
 def bstart(bar):
     return bars[bar - 1][0]
 FADES = [(bstart(50), bstart(52), 1.0, LOW),   # fade down over the coda's first 2 bars
-         (bstart(52), bstart(55), LOW, LOW),   # stay low through the breakdown
+         (bstart(52), bstart(55), LOW, LOW),   # stay very soft (all parts present)
          (bstart(55), bstart(58), LOW, 1.0)]   # ramp back up into the solo
 def accomp_gain(tick):
     for t0, t1, g0, g1 in FADES:
@@ -478,6 +483,15 @@ if len(_bass_on) >= 4:
     ev[CH_BASS] = [(t, m) for t, m in ev[CH_BASS]
                    if not (m.type == "note_on" and m.velocity > 0 and t >= _cut)]
     put(CH_BASS, bassify(53), 52, _cut, bars[-1][1] - _cut)   # soft held F
+
+# 3. the melody keeps its final fermata note, but the accompaniment guitars
+#    that ramble on past it are replaced by ONE softly arpeggiated F chord
+#    ringing under it (the mix fades it out).
+_fa, _fb = bars[-2][0], bars[-1][1]              # last two bars
+for _ch in (CH_RHY, CH_CLEAN):
+    ev[_ch] = [(t, m) for t, m in ev[_ch] if t < _fa]
+for _j, _p in enumerate([53, 57, 60, 65, 69]):   # F A C F A  arpeggiated up
+    put(CH_CLEAN, _p, hum(58 - _j * 3, 3), _fa + _j * S, _fb - _fa - _j * S)
 
 # ---------------------------------------------------------------- write
 out = mido.MidiFile(ticks_per_beat=TPB)
