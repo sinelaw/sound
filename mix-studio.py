@@ -35,7 +35,7 @@ PLAN = {
     # Rhythm guitar dropped from the mix entirely (kept in the score).
     "Clean Guitar":   dict(gain=-7.5, pan= 0.50, hp=160, comp=(0.35, 2.5), verb=0.06),
     "Bass":           dict(gain=-4.5, pan= 0.00, hp=35,  comp=(0.25, 4.0), verb=0.00),
-    "Piano":          dict(gain=-9.0, pan=-0.40, hp=180, comp=(0.40, 2.0), verb=0.10),
+    "Piano":          dict(gain=-3.5, pan=-0.35, hp=90,  comp=(0.40, 2.0), verb=0.03),
     # Organ back as a distinct role: sustained pad (see arrange-band.py), high +
     # airy so it can't be confused with the rhythmic piano, opposite side.
     "Organ":          dict(gain=-8.5,pan= 0.40, hp=170, comp=(0.45, 2.0), verb=0.18),

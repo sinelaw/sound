@@ -210,20 +210,9 @@ for t, m in sorted(ev[CH_SOLO], key=lambda x: (x[0], x[1].type == "note_on")):
         solo.append((s, t - s, m.note))
 solo.sort()
 
-# Minimal expression: light vibrato on the longest sustained notes only.
-# No portamento slides, no bend-ups - earlier versions read as far too slidey,
-# and never touch the fast descent (those notes must stay clean and in tune).
-for i, (st, dur, p) in enumerate(solo):
-    b = bar_of(st)
-    if p in DESC_NOTES and b >= SOLO_LAST:
-        continue                                  # leave the descent alone
-    if dur >= Q * 2:
-        n = int((dur * 0.55) // 90)
-        for k in range(n):
-            depth = 0.3 * min(1.0, k / max(1, n * 0.4)) * (1 if k % 2 else -1)
-            bend.append((st + int(dur * 0.4) + k * 90, mido.Message(
-                "pitchwheel", pitch=bval(depth), channel=CH_SOLO)))
-        bend.append((st + dur - 2, mido.Message("pitchwheel", pitch=0, channel=CH_SOLO)))
+# No expression modulation on the solo at all - straight, in-tune notes.
+# (Earlier vibrato/bends read as too much tremolo/slide.) The pitch wheel is
+# just held centred throughout.
 # make sure the wheel is centred before the descent - a stray bend on those
 # low notes through the amp would be exactly the kind of "weird sound" to avoid
 bend.append((DESC_START - 4, mido.Message("pitchwheel", pitch=0, channel=CH_SOLO)))
@@ -348,9 +337,11 @@ for bi, (a, b, beats) in enumerate(bars):
         root = c["bass"] % 12 + 48
         power = [root, root + 7, root + 12]
 
-        if sec == "intro" or (lvl <= 1 and sec == "verse" and style != "jazz") or subdued:
+        # clean-guitar arpeggios run through the verses AND the choruses/coda/
+        # outro (the same figure carries across), just not under the solo.
+        if sec in ("intro", "verse", "chorus", "coda", "outro") and style != "jazz":
             pat = tones * 3
-            avel = 46 if subdued else 64                 # softer in the breakdown
+            avel = 60 if sec in ("chorus", "outro") else 64
             for k in range(int(cd // E)):
                 put(CH_CLEAN, pat[k % len(pat)], hum(avel), cs_ + k * E, E + 40)
         if style == "jazz":                       # comp stabs on the off-beats
@@ -489,6 +480,23 @@ def gap_answer(voice_notes, ch, lo, hi, vel, minsec, only_bars=None):
 
 gap_answer(solo, CH_ORGAN, 60, 79, 72, int(Q * 1.2),
            only_bars=set(range(58, 67)))          # organ fills solo gaps, prominent
+
+# piano answers the lead EP's phrase gaps with SHORT SHARP chords, in the
+# sections where piano is the keyboard (verses / inter). Catches the shorter
+# "half-phrase" rests too, so it converses with the melody.
+_pbars = {b for b in range(1, NBARS + 1) if keyboard_for(b) == "piano"}
+_pl = sorted(_lead)
+for i in range(len(_pl) - 1):
+    _end = _pl[i][0] + _pl[i][1]
+    _gap = _pl[i + 1][0] - _end
+    if bar_of(_end) not in _pbars or _gap < E * 3:
+        continue
+    _c = chord_at(_end)
+    if not _c:
+        continue
+    for _p in voice(_c["pitches"], 55, 72):
+        # sharp attack but let it ring through the gap (not staccato)
+        put(CH_PIANO, _p, hum(74, 4), _end + S, min(int(_gap * 0.85), Q * 2))
 
 # 1. the band plays full right up to the coda, then fades over the first bar or
 #    two OF the coda (50-51), sits low through 52-54, and ramps back up over
