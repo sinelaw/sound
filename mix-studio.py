@@ -22,17 +22,23 @@ SF_ALT = os.path.expanduser("~/.cache/musescore_general.sf3")
 
 # track index in the MIDI -> (name, soundfont, gain_dB, pan, hp_hz, comp, verb)
 # pan: -1 = hard L, +1 = hard R
+# Orchestration/mixing for separation (strings dropped entirely):
+#  - each part gets its OWN register via high-pass (frequency carving) so they
+#    don't all pile into the same low-mids
+#  - each gets its OWN side of the stereo field (only melody/bass/drums centre)
+#  - organ is the single sustained PAD, pushed high + soft + wide-right
+#  - piano is rhythmic (stabs, see arrange-band.py) and sits mid-left
 PLAN = {
-    "Lead Vocal":     dict(gain=-5.0, pan= 0.00, hp=90 , comp=(0.30, 3.0), verb=0.05),
-    # solo: rendered clean, gets a real amp sim below, and sits ~7dB lower now
+    "Lead Vocal":     dict(gain=-4.5, pan= 0.00, hp=130, comp=(0.30, 3.0), verb=0.05),
     "Solo Guitar":    dict(gain= 3.5, pan= 0.00, hp=110, comp=(0.40, 3.0), verb=0.18),
-    "Harmony Guitar": dict(gain=-14.0,pan= 0.35, hp=110, comp=(0.35, 3.0), verb=0.22),
-    "Rhythm Guitar":  dict(gain=-9.5, pan=-0.45, hp=110, comp=(0.30, 3.0), verb=0.08),
-    "Clean Guitar":   dict(gain=-7.0, pan= 0.30, hp=140, comp=(0.35, 2.5), verb=0.06),
+    "Harmony Guitar": dict(gain=-14.0,pan= 0.40, hp=110, comp=(0.35, 3.0), verb=0.22),
+    # Rhythm guitar dropped from the mix entirely (kept in the score).
+    "Clean Guitar":   dict(gain=-7.5, pan= 0.50, hp=160, comp=(0.35, 2.5), verb=0.06),
     "Bass":           dict(gain=-4.5, pan= 0.00, hp=35,  comp=(0.25, 4.0), verb=0.00),
-    "Piano":          dict(gain=-14.0,pan=-0.30, hp=90,  comp=(0.40, 2.0), verb=0.14),
-    "Organ":          dict(gain=-12.0,pan= 0.30, hp=120, comp=(0.45, 2.0), verb=0.12),
-    "Strings":        dict(gain=-13.0,pan= 0.00, hp=160, comp=(0.50, 2.0), verb=0.30),
+    "Piano":          dict(gain=-9.0, pan=-0.40, hp=180, comp=(0.40, 2.0), verb=0.10),
+    # Organ back as a distinct role: sustained pad (see arrange-band.py), high +
+    # airy so it can't be confused with the rhythmic piano, opposite side.
+    "Organ":          dict(gain=-12.5,pan= 0.45, hp=300, comp=(0.45, 2.0), verb=0.18),
     "Drums":          dict(gain=-3.5, pan= 0.00, hp=0,   comp=(0.30, 3.5), verb=0.10),
 }
 
@@ -230,28 +236,60 @@ def main():
     print(f"stems: {len(stems)}")
 
     reuse = "--reuse" in sys.argv
+    # optional section preview: --section T0 T1  (seconds) crops every stem to
+    # that window (+2s pad for reverb/filter tails) so only that slice is
+    # processed - MUCH faster to iterate and judge a single spot.
+    sec_win = None
+    if "--section" in sys.argv:
+        i = sys.argv.index("--section")
+        t0, t1 = float(sys.argv[i + 1]), float(sys.argv[i + 2])
+        sec_win = (max(0.0, t0 - 0.5), t1 + 2.0)
+        print(f"SECTION preview: {t0:.1f}-{t1:.1f}s")
+
     rendered = {}
     for name, mid in stems:
         wav = mid.replace(".mid", ".wav")
         if not (reuse and os.path.exists(wav) and
                 os.path.getmtime(wav) >= os.path.getmtime(mid)):
             render(mid, wav, sf)
-        rendered[name] = load_wav(wav)
+        a = load_wav(wav)
+        if sec_win:
+            a = a[:, int(sec_win[0] * SR):int(sec_win[1] * SR)]
+        rendered[name] = a
         print(f"  {'cached  ' if reuse else 'rendered'} {name:15s} {rendered[name].shape[1]/SR:6.1f}s")
 
     n = max(a.shape[1] for a in rendered.values())
     mix = np.zeros((2, n))
     verb_bus = np.zeros((2, n))
 
+    # --only <substr>: mute everything except stems whose name matches, for
+    # isolating what a sound is (e.g. --only organ, --only solo).
+    only = None
+    if "--only" in sys.argv:
+        only = sys.argv[sys.argv.index("--only") + 1].lower()
+        print(f"SOLO: only '{only}' stems")
+    mute = None
+    if "--mute" in sys.argv:
+        mute = sys.argv[sys.argv.index("--mute") + 1].lower()
+        print(f"MUTE: dropping '{mute}' stems")
+
     print("\nper-stem processing:")
     for name, a in rendered.items():
         p = PLAN.get(name)
         if p is None:
             continue
+        if only and only not in name.lower():
+            continue
+        if mute and mute in name.lower():
+            continue
         x = np.pad(a, ((0, 0), (0, n - a.shape[1])))
         # NB: Proteus measured as a no-op (crest factor unchanged at any drive).
         # SmartAmp's lead channel genuinely saturates: 21.6 -> 9.3 dB crest.
         if name == "Solo Guitar":
+            # HP *before* the amp: the amp turns any subsonic energy into
+            # intermodulation noise that a post-amp filter can't undo. A guitar
+            # doesn't produce below ~80 Hz anyway.
+            x = highpass(x, 85)
             # heavy cascaded distortion across the whole solo, descent included
             # (the earlier heavy->light time-split caused a crossfade artifact).
             x = amp_sim(x, "SmartAmp.vst3",
@@ -292,14 +330,16 @@ def main():
     mix = limiter(mix, -1.0)
 
     # gentle master fade-out over the last few seconds so the ending settles
-    # rather than stopping dead (the arpeggiated chord + bass ring down)
-    fade = int(4.0 * SR)
-    if mix.shape[1] > fade:
-        env = np.concatenate([np.ones(mix.shape[1] - fade),
-                              np.linspace(1.0, 0.0, fade) ** 1.6])
-        mix = mix * env
+    # rather than stopping dead (the arpeggiated chord + bass ring down).
+    # Skipped in section preview (it's a mid-song slice, not the ending).
+    if not sec_win:
+        fade = int(4.0 * SR)
+        if mix.shape[1] > fade:
+            env = np.concatenate([np.ones(mix.shape[1] - fade),
+                                  np.linspace(1.0, 0.0, fade) ** 1.6])
+            mix = mix * env
 
-    out = "uf-gozal-band-mixed.wav"
+    out = "uf-gozal-section.wav" if sec_win else "uf-gozal-band-mixed.wav"
     data = np.clip(mix.T, -1, 1)
     with wave.open(out, "w") as w:
         w.setnchannels(2); w.setsampwidth(2); w.setframerate(SR)

@@ -100,6 +100,23 @@ def section_of(b):
     if b <= 76: return "chorus", 2, "rock"
     return "outro", 2, "rock"
 
+# Piano and organ never play together - they INTERCHANGE by section, so the two
+# keyboards trade off through the song instead of stacking into one chord bed.
+#   piano = rhythmic short stabs;  organ = sustained pad with gaps.
+def keyboard_for(b):
+    if b <= 4:  return None            # intro: neither (clean guitar only)
+    if b <= 13: return "piano"         # verse A
+    if b <= 22: return "organ"         # verse B
+    if b <= 29: return "piano"         # chorus
+    if b <= 33: return "organ"         # inter
+    if b <= 42: return "piano"         # verse
+    if b <= 49: return "organ"         # chorus
+    if b <= 57: return "piano"         # coda breakdown (soft stabs)
+    if b <= 66: return "organ"         # solo (sustained pad under the lead)
+    if b <= 73: return "piano"         # chorus
+    if b <= 76: return "organ"         # chorus
+    return "piano"                     # outro
+
 CH_LEAD, CH_SOLO, CH_HARM, CH_RHY, CH_CLEAN, CH_BASS, CH_PIANO, CH_ORGAN, CH_STR, CH_DRUM = range(10)
 SPEC = [
     ("Lead Vocal",     CH_LEAD,   5),   # FM/DX electric piano (sharp, bell-like)
@@ -156,7 +173,10 @@ for st, dur, p, v in melody:
 # --- slow, deliberate blues descent, tumbling ~2 octaves down ---------------
 # half-speed (16th-note steps) so it reads as a clear descending line, not a
 # blur. Strictly non-overlapping; ends on F1. Spills past the barline into 67.
-DESC = [77, 74, 70, 65, 60, 53, 48, 41, 29]   # F blues plunge, ends on F1
+# ends on F2 (41), NOT F1 - a guitar's lowest string is E2(40); anything below
+# that fed into the neural amp model is sub-range garbage (the "horrible sound"
+# at the end of the solo). Three octaves of descent is plenty.
+DESC = [77, 74, 70, 65, 60, 53, 48, 41]        # F blues plunge, ends on F2
 tpos = DESC_START
 for i, p in enumerate(DESC):
     step = S if i < len(DESC) - 1 else E       # 16ths, last note longer
@@ -272,11 +292,12 @@ for i in range(len(_lead) - 1):
     c = chord_at(end)
     if not c:
         continue
-    for p in voice(c["pitches"], 52, 67):            # soft chord early in the gap
-        put(CH_LEAD, p, hum(40, 4), end + S, min(int(gap * 0.55), Q * 2))
-    if gap >= Q * 2 and _gi % 2 == 0:                # one blue note before ~every
-        p = BLUE_NOTES[_gi % len(BLUE_NOTES)]        # other long gap resolves
-        put(CH_LEAD, p, hum(56, 5), nxt - E, E - 20)
+    # the EP no longer comps chords under its own melody (that self-doubling
+    # muddied the harmony with the piano/organ). Just an occasional single
+    # blue-note fill, in the lead's own tone, to answer a phrase.
+    if gap >= Q * 2 and _gi % 2 == 0:
+        p = BLUE_NOTES[_gi % len(BLUE_NOTES)]
+        put(CH_LEAD, p, hum(52, 5), nxt - E, E - 20)
     _gi += 1
 
 # ---------------------------------------------------------------- generate
@@ -350,24 +371,21 @@ for bi, (a, b, beats) in enumerate(bars):
             for p in power:
                 put(CH_RHY, p, hum(52), cs_, cd - 20)
 
-        if lvl >= 1:
-            if style == "jazz":
-                for k in range(int(cd // Q)):
-                    if k % 2 == 0:
-                        for p in tones:
-                            put(CH_PIANO, p, hum(60), swing(cs_ + k * Q + E), E)
-            elif lvl == 1:
-                for k in range(int(cd // Q)):
-                    for p in tones:
-                        put(CH_PIANO, p, hum(56), cs_ + k * Q + E, E - 20)
-            else:
-                for k in range(int(cd // Q)):
-                    for p in tones:
-                        put(CH_PIANO, p, hum(68), cs_ + k * Q, Q - 30)
-
-        if lvl >= 2:
-            for p in voice(c["pitches"], 55, 79):
-                put(CH_ORGAN, p, hum(60), cs_, cd - 10)
+        kbd = keyboard_for(bar)
+        # PIANO = rhythmic, but sparse: short chord stabs on beats 1 & 3 only
+        # (slower repeating, staccato) - never a sustained bed.
+        if kbd == "piano":
+            ptones = voice(c["pitches"], 55, 72)
+            for k in range(int(cd // Q)):
+                if k % 2 == 0:                             # beats 1 & 3
+                    for p in ptones:
+                        put(CH_PIANO, p, hum(56 if lvl == 1 else 64),
+                            cs_ + k * Q, E - 40)           # short stab
+        # ORGAN = fully sustained pad, NO rhythm, WITH GAPS: only the first
+        # chord of every other bar, held long. Its own high register + side.
+        if kbd == "organ" and c is cs[0] and bar % 2 == 0:
+            for p in voice(c["pitches"], 67, 86):
+                put(CH_ORGAN, p, hum(50), cs_, cd - 10)
         if sec in ("chorus", "solo", "coda", "outro"):
             for p in voice(c["pitches"], 64, 88):
                 put(CH_STR, p, hum(54), cs_, cd - 10)
@@ -450,6 +468,29 @@ for bi, (a, b, beats) in enumerate(bars):
         put(CH_DRUM, K, 70, a, Q)
 
 # --- post-passes ------------------------------------------------------------
+# 0. keyboards answer in the gaps of the lead/solo (call-and-response). Where
+#    the solo leaves a rest, the organ swells a prominent chord into the gap;
+#    where the sung melody rests, the piano answers with a short chord.
+def gap_answer(voice_notes, ch, lo, hi, vel, minsec, only_bars=None):
+    vn = sorted(voice_notes)
+    for i in range(len(vn) - 1):
+        end = vn[i][0] + vn[i][1]
+        nxt = vn[i + 1][0]
+        gap = nxt - end
+        b = bar_of(end)
+        if only_bars and b not in only_bars:
+            continue
+        if gap < minsec:
+            continue
+        c = chord_at(end)
+        if not c:
+            continue
+        for p in voice(c["pitches"], lo, hi):
+            put(ch, p, hum(vel, 4), end + S, min(int(gap * 0.7), Q * 2))
+
+gap_answer(solo, CH_ORGAN, 60, 79, 72, int(Q * 1.2),
+           only_bars=set(range(58, 67)))          # organ fills solo gaps, prominent
+
 # 1. the band plays full right up to the coda, then fades over the first bar or
 #    two OF the coda (50-51), sits low through 52-54, and ramps back up over
 #    55-57. Continuous (per-note by onset time) so it glides, not steps.
