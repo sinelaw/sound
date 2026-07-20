@@ -1,0 +1,29 @@
+# generated audio
+*.wav
+*.mp3
+*.MP3
+*.midi
+*.mid
+stems/
+
+# generated engravings (but keep the original input score)
+*.pdf
+!oof-orig.pdf
+
+# python env / caches (regenerate with: cd omr && uv sync)
+omr/.venv/
+__pycache__/
+*.pyc
+
+# downloaded sample libraries (multi-GB, fetched separately)
+sample-libraries/
+
+# OMR working data / scratch
+unzipped/
+old/
+*.log
+*.png
+ardour-test*/
+
+# large source inputs kept out of git
+oof.zip
