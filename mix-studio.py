@@ -23,14 +23,14 @@ SF_ALT = os.path.expanduser("~/.cache/musescore_general.sf3")
 # track index in the MIDI -> (name, soundfont, gain_dB, pan, hp_hz, comp, verb)
 # pan: -1 = hard L, +1 = hard R
 PLAN = {
-    "Lead Vocal":     dict(gain=-3.0, pan= 0.00, hp=120, comp=(0.30, 3.0), verb=0.16),
+    "Lead Vocal":     dict(gain=-5.0, pan= 0.00, hp=90 , comp=(0.30, 3.0), verb=0.05),
     # solo: rendered clean, gets a real amp sim below, and sits ~7dB lower now
-    "Solo Guitar":    dict(gain= 2.0, pan= 0.00, hp=110, comp=(0.40, 3.0), verb=0.18),
+    "Solo Guitar":    dict(gain= 3.5, pan= 0.00, hp=110, comp=(0.40, 3.0), verb=0.18),
     "Harmony Guitar": dict(gain=-14.0,pan= 0.35, hp=110, comp=(0.35, 3.0), verb=0.22),
     "Rhythm Guitar":  dict(gain=-9.5, pan=-0.45, hp=110, comp=(0.30, 3.0), verb=0.08),
     "Clean Guitar":   dict(gain=-9.0, pan= 0.45, hp=140, comp=(0.35, 2.5), verb=0.14),
     "Bass":           dict(gain=-4.5, pan= 0.00, hp=35,  comp=(0.25, 4.0), verb=0.00),
-    "Piano":          dict(gain=-10.0,pan=-0.25, hp=90,  comp=(0.40, 2.0), verb=0.14),
+    "Piano":          dict(gain=-14.0,pan=-0.30, hp=90,  comp=(0.40, 2.0), verb=0.14),
     "Organ":          dict(gain=-12.0,pan= 0.30, hp=120, comp=(0.45, 2.0), verb=0.12),
     "Strings":        dict(gain=-13.0,pan= 0.00, hp=160, comp=(0.50, 2.0), verb=0.30),
     "Drums":          dict(gain=-3.5, pan= 0.00, hp=0,   comp=(0.30, 3.5), verb=0.10),
@@ -252,10 +252,28 @@ def main():
         # NB: Proteus measured as a no-op (crest factor unchanged at any drive).
         # SmartAmp's lead channel genuinely saturates: 21.6 -> 9.3 dB crest.
         if name == "Solo Guitar":
-            x = amp_sim(x, "SmartAmp.vst3",
-                        dict(leadgain=1.0, leadbass=0.2, leadmid=0.6,
-                             leadtreble=0.5, presence=0.7, master=0.6),
-                        pregain=6.0, stages=2)          # heaviest SmartAmp can do
+            # heavy distortion for the solo, but drop it for the closing
+            # descent - low, fast notes through the cascade turn to noise.
+            heavy = amp_sim(x, "SmartAmp.vst3",
+                            dict(leadgain=1.0, leadbass=0.2, leadmid=0.6,
+                                 leadtreble=0.5, presence=0.7, master=0.6),
+                            pregain=6.0, stages=2)      # heaviest SmartAmp can do
+            light = amp_sim(x, "SmartAmp.vst3",
+                            dict(leadgain=0.32, leadbass=0.3, leadmid=0.5,
+                                 leadtreble=0.5, presence=0.4, master=0.5),
+                            pregain=1.0, stages=1)      # mild crunch for the descent
+            def bar_time(bar):                          # seconds to a bar (pre-ritard)
+                two = {12, 21, 41, 65}
+                return sum(2 if i in two else 4 for i in range(1, bar)) * 60.0 / 78.0
+            desc = bar_time(66) + 3 * 60.0 / 78.0 - 0.15   # just before beat 4 of 66
+            xf = int(desc * SR)
+            w = int(0.04 * SR)
+            x = heavy.copy()
+            if xf < x.shape[1]:
+                end = min(xf + w, x.shape[1])
+                f = np.linspace(1, 0, end - xf)
+                x[:, xf:end] = heavy[:, xf:end] * f + light[:, xf:end] * (1 - f)
+                x[:, end:] = light[:, end:]
         elif name == "Rhythm Guitar":
             x = amp_sim(x, "SmartAmp.vst3",
                         dict(leadgain=0.7, leadbass=0.3, leadmid=0.45,

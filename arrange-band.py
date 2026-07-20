@@ -77,8 +77,8 @@ NBARS = len(bars)
 
 # ---------------------------------------------------------------- sections
 SOLO_BARS = range(58, 67)
-SUBDUED_BARS = set(range(50, 55))   # quiet breakdown before the solo build (~2:30)
-BUILD_BARS = {55, 56, 57}           # last few bars building into the solo
+SUBDUED_BARS = {52, 53, 54}         # quiet heart of the breakdown (band fades in
+                                    # over 50-51 and ramps back up over 55-57)
 SOLO_LAST = 66                     # gets the blues descent
 CLEAN_MEL_BARS = set(range(1, 5)) | set(range(30, 34))
 SECTION_STARTS = {1, 5, 14, 23, 30, 34, 43, 50, 58, 67, 71, 74, 77}
@@ -100,7 +100,7 @@ def section_of(b):
 
 CH_LEAD, CH_SOLO, CH_HARM, CH_RHY, CH_CLEAN, CH_BASS, CH_PIANO, CH_ORGAN, CH_STR, CH_DRUM = range(10)
 SPEC = [
-    ("Lead Vocal",     CH_LEAD,  53),
+    ("Lead Vocal",     CH_LEAD,   5),   # FM/DX electric piano (sharp, bell-like)
     ("Solo Guitar",    CH_SOLO,  27),   # CLEAN - amp sim added in the mix
     ("Harmony Guitar", CH_HARM,  27),
     ("Rhythm Guitar",  CH_RHY,   29),
@@ -141,7 +141,7 @@ for st, dur, p, v in melody:
         d = min(dur, DESC_START - st) if b == SOLO_LAST else dur
         put(CH_SOLO, p, hum(78, 6), st, d)            # quieter, clean
     elif b in CLEAN_MEL_BARS:
-        put(CH_CLEAN, p, hum(88, 6), st, dur)
+        put(CH_RHY, p, hum(84, 6), st, dur)          # intro motif on rhythm guitar
     else:
         # fade the very last notes of the tune down to a soft ending (~4:04)
         lv = 96
@@ -150,8 +150,6 @@ for st, dur, p, v in melody:
         elif b == 79:
             lv = 78
         put(CH_LEAD, p, hum(lv, 5), st, dur)
-        if b >= 43 and b < 79:
-            put(CH_CLEAN, p - 12, hum(52, 5), st, dur)
 
 # --- fast abrupt blues descent, then tumble down ~1 more octave -------------
 # notes are strictly non-overlapping (durations < the step) and stop at F1 -
@@ -232,6 +230,49 @@ K, SN, SS, HH, OH, PH, CR, RD, RB, T1, T2, T3 = 36, 38, 37, 42, 46, 44, 49, 51, 
 def swing(off):
     """map an 8th offset to a swung (triplet) position"""
     return off if off % Q == 0 else off - E + int(E * 4 / 3)
+
+def chord_at(tick):
+    cur = None
+    for c in chords:
+        if c["start"] <= tick:
+            cur = c
+        else:
+            break
+    return cur
+
+# --- electric-piano lead comps itself: soft chords + bluesy licks in the gaps
+# The EP carries the melody; where a singer would breathe between phrases it
+# fills with a quiet chord voicing and, now and then, a short F-blues lick.
+_lead, _o = [], {}
+for _t, _m in sorted(ev[CH_LEAD], key=lambda x: (x[0], x[1].type == "note_on")):
+    if _m.type == "note_on":
+        _o.setdefault(_m.note, []).append(_t)
+    elif _o.get(_m.note):
+        _s = _o[_m.note].pop(0)
+        _lead.append((_s, _t - _s, _m.note))
+_lead.sort()
+
+# a single blue note dropped in now and then - no runs (they read as cheesy)
+BLUE_NOTES = [70, 68, 71, 65, 72]                    # Bb4 Ab4 B4(blue) F4 C5
+_gi = 0
+for i in range(len(_lead) - 1):
+    end = _lead[i][0] + _lead[i][1]
+    nxt = _lead[i + 1][0]
+    gap = nxt - end
+    b = bar_of(end)
+    if b in SOLO_BARS or b in CLEAN_MEL_BARS or b in SUBDUED_BARS or b >= 79:
+        continue
+    if gap < Q:
+        continue
+    c = chord_at(end)
+    if not c:
+        continue
+    for p in voice(c["pitches"], 52, 67):            # soft chord early in the gap
+        put(CH_LEAD, p, hum(40, 4), end + S, min(int(gap * 0.55), Q * 2))
+    if gap >= Q * 2 and _gi % 2 == 0:                # one blue note before ~every
+        p = BLUE_NOTES[_gi % len(BLUE_NOTES)]        # other long gap resolves
+        put(CH_LEAD, p, hum(56, 5), nxt - E, E - 20)
+    _gi += 1
 
 # ---------------------------------------------------------------- generate
 for bi, (a, b, beats) in enumerate(bars):
@@ -402,6 +443,41 @@ for bi, (a, b, beats) in enumerate(bars):
     if bar == NBARS:
         put(CH_DRUM, CR, 72, a, Q * 4)          # soft final cymbal, let it ring
         put(CH_DRUM, K, 70, a, Q)
+
+# --- post-passes ------------------------------------------------------------
+# 1. the band plays full right up to the coda, then fades over the first bar or
+#    two OF the coda (50-51), sits low through 52-54, and ramps back up over
+#    55-57. Continuous (per-note by onset time) so it glides, not steps.
+ACCOMP = {CH_RHY, CH_CLEAN, CH_BASS, CH_PIANO, CH_ORGAN, CH_STR, CH_DRUM}
+LOW = 0.4
+def bstart(bar):
+    return bars[bar - 1][0]
+FADES = [(bstart(50), bstart(52), 1.0, LOW),   # fade down over the coda's first 2 bars
+         (bstart(52), bstart(55), LOW, LOW),   # stay low through the breakdown
+         (bstart(55), bstart(58), LOW, 1.0)]   # ramp back up into the solo
+def accomp_gain(tick):
+    for t0, t1, g0, g1 in FADES:
+        if t0 <= tick < t1:
+            return g0 + (g1 - g0) * (tick - t0) / (t1 - t0)
+    return 1.0
+for ch in ACCOMP:
+    scaled = []
+    for t, msg in ev[ch]:
+        if msg.type == "note_on" and msg.velocity > 0:
+            g = accomp_gain(t)
+            if g < 0.999:
+                msg = msg.copy(velocity=max(1, int(msg.velocity * g)))
+        scaled.append((t, msg))
+    ev[ch] = scaled
+
+# 2. at the very end, drop the last few busy bass notes and hold one soft root
+#    of the key (F) instead - the running notes were redundant there.
+_bass_on = sorted(t for t, m in ev[CH_BASS] if m.type == "note_on" and m.velocity > 0)
+if len(_bass_on) >= 4:
+    _cut = _bass_on[-4]                         # remove the final four onsets
+    ev[CH_BASS] = [(t, m) for t, m in ev[CH_BASS]
+                   if not (m.type == "note_on" and m.velocity > 0 and t >= _cut)]
+    put(CH_BASS, bassify(53), 52, _cut, bars[-1][1] - _cut)   # soft held F
 
 # ---------------------------------------------------------------- write
 out = mido.MidiFile(ticks_per_beat=TPB)
