@@ -105,17 +105,14 @@ def section_of(b):
 #   piano = rhythmic short stabs;  organ = sustained pad with gaps.
 def keyboard_for(b):
     if b <= 4:  return None            # intro: neither (clean guitar only)
-    if b <= 13: return "piano"         # verse A
-    if b <= 22: return "organ"         # verse B
-    if b <= 29: return "piano"         # chorus
-    if b <= 33: return "organ"         # inter
+    if b <= 22: return "piano"         # verses A + B (intimate, rhythmic)
+    if b <= 29: return "organ"         # chorus  -> full organ
+    if b <= 33: return "piano"         # inter
     if b <= 42: return "piano"         # verse
-    if b <= 49: return "organ"         # chorus
-    if b <= 57: return "piano"         # coda breakdown (soft stabs)
-    if b <= 66: return "organ"         # solo (sustained pad under the lead)
-    if b <= 73: return "piano"         # chorus
-    if b <= 76: return "organ"         # chorus
-    return "piano"                     # outro
+    if b <= 49: return "organ"         # chorus  -> full organ
+    if b <= 57: return "organ"         # coda    -> full organ
+    if b <= 66: return "organ"         # solo    -> answers in the gaps
+    return "organ"                     # choruses 67-76 + outro -> full organ
 
 CH_LEAD, CH_SOLO, CH_HARM, CH_RHY, CH_CLEAN, CH_BASS, CH_PIANO, CH_ORGAN, CH_STR, CH_DRUM = range(10)
 SPEC = [
@@ -126,7 +123,7 @@ SPEC = [
     ("Clean Guitar",   CH_CLEAN, 27),
     ("Bass",           CH_BASS,  33),
     ("Piano",          CH_PIANO,  0),
-    ("Organ",          CH_ORGAN, 18),
+    ("Organ",          CH_ORGAN, 16),   # drawbar organ - warm filler pad
     ("Strings",        CH_STR,   48),
     ("Drums",          CH_DRUM,   0),
 ]
@@ -381,11 +378,13 @@ for bi, (a, b, beats) in enumerate(bars):
                     for p in ptones:
                         put(CH_PIANO, p, hum(56 if lvl == 1 else 64),
                             cs_ + k * Q, E - 40)           # short stab
-        # ORGAN = fully sustained pad, NO rhythm, WITH GAPS: only the first
-        # chord of every other bar, held long. Its own high register + side.
-        if kbd == "organ" and c is cs[0] and bar % 2 == 0:
-            for p in voice(c["pitches"], 67, 86):
-                put(CH_ORGAN, p, hum(50), cs_, cd - 10)
+        # ORGAN = sustained pad (no rhythm), lower/warmer register.
+        #  chorus / coda / outro -> FULL, every bar, no gaps, a touch louder
+        #  (in the solo it instead answers the gaps - see the post-pass).
+        if kbd == "organ" and sec != "solo":
+            ov = {"chorus": 62, "coda": 54, "outro": 56}.get(sec, 52)
+            for p in voice(c["pitches"], 67, 84):        # higher pad register
+                put(CH_ORGAN, p, hum(ov), cs_, cd - 10)
         if sec in ("chorus", "solo", "coda", "outro"):
             for p in voice(c["pitches"], 64, 88):
                 put(CH_STR, p, hum(54), cs_, cd - 10)

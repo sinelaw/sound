@@ -38,7 +38,7 @@ PLAN = {
     "Piano":          dict(gain=-9.0, pan=-0.40, hp=180, comp=(0.40, 2.0), verb=0.10),
     # Organ back as a distinct role: sustained pad (see arrange-band.py), high +
     # airy so it can't be confused with the rhythmic piano, opposite side.
-    "Organ":          dict(gain=-12.5,pan= 0.45, hp=300, comp=(0.45, 2.0), verb=0.18),
+    "Organ":          dict(gain=-8.5,pan= 0.40, hp=170, comp=(0.45, 2.0), verb=0.18),
     "Drums":          dict(gain=-3.5, pan= 0.00, hp=0,   comp=(0.30, 3.5), verb=0.10),
 }
 
@@ -129,6 +129,22 @@ def highpass(x, hz):
         return x
     b, a = signal.butter(2, hz / (SR / 2), "highpass")
     return signal.lfilter(b, a, x, axis=-1)
+
+
+def rotary(x, rate=5.4, depth=0.16):
+    """Leslie-ish texture for the organ: amplitude tremolo with an L/R phase
+    offset (rotary shimmer) plus a subtle detuned chorus layer for width."""
+    n = x.shape[1]
+    t = np.arange(n) / SR
+    triL = 1.0 - depth * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t))
+    triR = 1.0 - depth * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t + 1.9))
+    y = np.vstack([x[0] * triL, x[1] * triR])
+    # chorus: a short, slowly-modulated delay mixed in low
+    base = int(0.010 * SR)
+    mod = (0.0035 * SR * np.sin(2 * np.pi * 0.6 * t)).astype(int)
+    idx = np.clip(np.arange(n) - base - mod, 0, n - 1)
+    y += 0.35 * np.vstack([x[0][idx], x[1][idx]])
+    return y
 
 
 def shelf(x, hz, gain_db, kind="high"):
@@ -301,6 +317,8 @@ def main():
                         dict(leadgain=0.7, leadbass=0.3, leadmid=0.45,
                              leadtreble=0.4, presence=0.5, master=0.5),
                         pregain=2.0, stages=1)
+        if name == "Organ":
+            x = rotary(x)                                # Leslie-ish texture
         x = highpass(x, p["hp"])
         if name == "Drums":
             x = shelf(x, 6000, 2.0)

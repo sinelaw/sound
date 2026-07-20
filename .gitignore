@@ -31,3 +31,7 @@ ardour-test*/
 
 # large source inputs kept out of git
 oof.zip
+
+# generated score intermediates (music21 lilypond source + pdf)
+uf-gozal-score
+uf-gozal-score.ly
